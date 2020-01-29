@@ -9,6 +9,9 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 class Handler(FileSystemEventHandler):
+    def __init__(self, provider):
+        self.provider = provider
+
     def on_created(self, event):
         self.handle_event(event)
 
@@ -21,13 +24,14 @@ class Handler(FileSystemEventHandler):
             print('Certificate storage changed (' + os.path.basename(event.src_path) + ')')
             self.handle_file(event.src_path)
 
-    def handle_file(self, file):
+    def handle_file(self, file, provider):
         # Read JSON file
         data = json.loads(open(file).read())
+        print('Using provider: ' + self.provider)
 
         # Determine ACME version
         try:
-            acme_version = 2 if 'acme-v02' in data['Account']['Registration']['uri'] else 1
+            acme_version = 2 if 'acme-v02' in data[self.provider]['Account']['Registration']['uri'] else 1
         except TypeError:
             if 'DomainsCertificate' in data:
                 acme_version = 1
@@ -38,7 +42,7 @@ class Handler(FileSystemEventHandler):
         if acme_version == 1:
             certs = data['DomainsCertificate']['Certs']
         elif acme_version == 2:
-            certs = data['Certificates']
+            certs = data[self.provider]['Certificates']
 
         print('Certificate storage contains ' + str(len(certs)) + ' certificates')
 
@@ -50,10 +54,10 @@ class Handler(FileSystemEventHandler):
                 fullchain = c['Certificate']['Certificate']
                 sans = c['Domains']['SANs']
             elif acme_version == 2:
-                name = c['Domain']['Main']
-                privatekey = c['Key']
-                fullchain = c['Certificate']
-                sans = c['Domain']['SANs']
+                name = c['domain']['main']
+                privatekey = c['key']
+                fullchain = c['certificate']
+                sans = c['domain']['sans'] if 'sans' in c['domain'].keys() else None
 
             # Decode private key, certificate and chain
             privatekey = b64decode(privatekey).decode('utf-8')
@@ -107,6 +111,7 @@ class Handler(FileSystemEventHandler):
 if __name__ == "__main__":
     # Determine path to watch
     path = sys.argv[1] if len(sys.argv) > 1 else './data'
+    provider = sys.argv[2] if len(sys.argv) > 2 else 'default'
 
     # Create output directories if it doesn't exist
     try:
@@ -121,7 +126,7 @@ if __name__ == "__main__":
             raise
 
     # Create event handler and observer
-    event_handler = Handler()
+    event_handler = Handler(provider)
     observer = Observer()
 
     # Extract certificates from current file(s) before watching
@@ -129,12 +134,12 @@ if __name__ == "__main__":
     try:
         for file in files:
             print('Certificate storage found (' + os.path.basename(file) + ')')
-            event_handler.handle_file(file)
+            event_handler.handle_file(file, provider)
     except Exception as e:
         print(e)
 
     # Register the directory to watch
-    observer.schedule(event_handler, path)
+    observer.schedule(event_handler, path, provider)
 
     # Main loop to watch the directory
     observer.start()
